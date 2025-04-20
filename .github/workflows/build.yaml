@@ -1,0 +1,269 @@
+name: Build
+on: [push, pull_request]
+
+env:
+  gnutls_version: '3.8.7'
+  curl_options: '-f -O -L --connect-timeout 15 -m 900 --retry 15 --retry-delay 10 --retry-max-time 300 --retry-all-errors'
+  sourceforge_mirror: 'downloads.sourceforge.net'
+  qt_mirror: 'mirrors.ukfast.co.uk/sites/qt.io'
+  cmake_loglevel: 'DEBUG'
+
+
+jobs:
+
+  build:
+    name: Build Windows MSVC
+
+    strategy:
+      fail-fast: false
+      matrix:
+       include:
+         - name: "Windows x86_64 debug"
+           runner: windows-2022
+           arch: x86_64
+           buildtype: debug
+
+         - name: "Windows x86_64 release"
+           runner: windows-2022
+           arch: x86_64
+           buildtype: release
+
+         - name: "Windows x86 debug"
+           runner: windows-2022
+           arch: x86
+           buildtype: debug
+
+         - name: "Windows x86 release"
+           runner: windows-2022
+           arch: x86
+           buildtype: release
+
+         - name: "Windows arm64 debug"
+           runner: windows-11-arm
+           arch: arm64
+           buildtype: debug
+
+         - name: "Windows arm64 release"
+           runner: windows-11-arm
+           arch: arm64
+           buildtype: release
+
+    runs-on: ${{matrix.runner}}
+
+    steps:
+
+      - name: Set buildtype
+        shell: bash
+        run: echo "buildtype=$(echo ${{matrix.buildtype}} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Set cmake and meson buildtype
+        shell: bash
+        run: |
+          echo "cmake_buildtype=$(echo ${{env.buildtype}} | sed 's/.*/\u&/')" >> $GITHUB_ENV
+          echo "meson_buildtype=${{env.buildtype}}" >> $GITHUB_ENV
+
+      - name: Set prefix path
+        shell: bash
+        run: |
+          echo "prefix_path_backslash=c:\strawberry_msvc_${{matrix.arch}}_${{env.buildtype}}" >> $GITHUB_ENV
+          echo "prefix_path_backslash2=c:\\\\strawberry_msvc_${{matrix.arch}}_${{env.buildtype}}" >> $GITHUB_ENV
+          echo "prefix_path_forwardslash=c:/strawberry_msvc_${{matrix.arch}}_${{env.buildtype}}" >> $GITHUB_ENV
+          echo "prefix_path_unix=/c/strawberry_msvc_${{matrix.arch}}_${{env.buildtype}}" >> $GITHUB_ENV
+
+      - name: Cleanup PATH
+        uses: egor-tensin/cleanup-path@v4
+        with:
+          dirs: ${{env.prefix_path_backslash}}\bin;C:\Windows;C:\Windows\system32;C:\Program Files\Git\bin;C:\Program Files\CMake\bin;C:\Program Files\GitHub CLI;C:\ProgramData\Chocolatey\bin;C:\Strawberry\perl\bin;C:\hostedtoolcache\windows\Python\3.9.13\x64;C:\hostedtoolcache\windows\Python\3.9.13\x64\Scripts;C:\Users\runneradmin\.cargo\bin
+
+      - name: Set lib postfix
+        if: env.buildtype == 'debug'
+        shell: bash
+        run: echo "lib_postfix=d" >> $GITHUB_ENV
+
+      - name: Set arch variables (x86)
+        if: matrix.arch == 'x86'
+        shell: bash
+        run: |
+          echo "openssl_platform=VC-WIN32" >> $GITHUB_ENV
+          echo "msbuild_platform=win32" >> $GITHUB_ENV
+          echo "arch_short=x86" >> $GITHUB_ENV
+          echo "arch_win=win32" >> $GITHUB_ENV
+          echo "arch_bits=32" >> $GITHUB_ENV
+          echo "libdir=lib" >> $GITHUB_ENV
+          echo "bindir=bin" >> $GITHUB_ENV
+
+      - name: Set arch variables (x86_64)
+        if: matrix.arch == 'x86_64'
+        shell: bash
+        run: |
+          echo "openssl_platform=VC-WIN64A" >> $GITHUB_ENV
+          echo "msbuild_platform=x64" >> $GITHUB_ENV
+          echo "arch_short=x64" >> $GITHUB_ENV
+          echo "arch_win=win64" >> $GITHUB_ENV
+          echo "arch_bits=64" >> $GITHUB_ENV
+          echo "libdir=lib64" >> $GITHUB_ENV
+          echo "bindir=bin64" >> $GITHUB_ENV
+
+      - name: Set arch variables (arm64)
+        if: matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          echo "openssl_platform=VC-WIN64-ARM" >> $GITHUB_ENV
+          echo "msbuild_platform=arm64" >> $GITHUB_ENV
+          echo "arch_short=arm64" >> $GITHUB_ENV
+          echo "arch_win=win64" >> $GITHUB_ENV
+          echo "arch_bits=64" >> $GITHUB_ENV
+          echo "libdir=libARM64" >> $GITHUB_ENV
+          echo "bindir=binARM64" >> $GITHUB_ENV
+
+      - name: Create directories
+        shell: bash
+        run: mkdir -p ${{env.prefix_path_unix}}/{bin,lib,include}
+
+      - name: Update PATH
+        shell: pwsh
+        run: echo "${{env.prefix_path_backslash}}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Copy bin files
+        shell: bash
+        run: cp /c/strawberry/c/bin/{patch.exe,strip.exe,strings.exe,objdump.exe} ${{env.prefix_path_unix}}/bin
+
+      # - name: Delete conflicting libraries
+        # shell: bash
+        # run: rm -rf /c/{msys64,mingw32,mingw64} /c/strawberry/c
+        # "/c/program files/OpenSSL"
+
+      # - name: Delete conflicting icu
+        # shell: bash
+        # run: find "/c/program files (x86)/windows kits/" -type f \( -iname 'icu*.lib' -o -iname 'icu*.h' \) -print -delete
+
+      # - name: Setup Python
+        # uses: actions/setup-python@v5
+
+      # - name: Install python dependencies
+        # shell: cmd
+        # run: pip install meson ninja
+
+
+      - name: Setup MSVC Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{matrix.arch}}
+          sdk: 10.0.20348.0
+          vsversion: 2022
+
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Create downloads directory
+        shell: cmd
+        run: mkdir downloads
+
+      - name: Create build directory
+        shell: cmd
+        run: mkdir build
+
+
+      - name: Download VSYASM
+        shell: cmd
+        working-directory: downloads
+        run: curl ${{env.curl_options}} https://github.com/ShiftMediaProject/VSYASM/releases/download/1.0/VSYASM.zip
+        
+      - name: Extract VSYASM
+        shell: cmd
+        working-directory: build
+        run: |
+          mkdir VSYASM
+          cd VSYASM
+          7z x "..\..\downloads\VSYASM.zip"
+
+      - name: Patch VSYASM
+        shell: cmd
+        working-directory: build/VSYASM
+        run: patch -p1 < ../../patches/vsyasm.patch
+
+      - name: Install VSYASM
+        shell: cmd
+        working-directory: build\VSYASM
+        run: install_script.bat
+
+
+      - name: Download GnuTLS
+        shell: cmd
+        working-directory: build
+        #run: git clone --recurse-submodules -b "${{env.gnutls_version}}" https://github.com/ShiftMediaProject/gnutls
+        run: |
+          mkdir ShiftMediaProject
+          cd ShiftMediaProject
+          git clone --recurse-submodules https://github.com/ShiftMediaProject/gnutls
+
+      # - name: Patch GnuTLS
+        # shell: bash
+        # working-directory: build/gnutls
+        # run: sed -i 's/$(ProjectDir)..\\..\\..\\msvc\\/$(ProjectDir)\\build\\/g' SMP/smp_deps.props SMP/smp_winrt_deps.props
+
+      - name: Get GnuTLS dependencies
+        continue-on-error: true
+        shell: cmd
+        working-directory: build/ShiftMediaProject/gnutls/SMP
+        run: project_get_dependencies.bat
+
+      - name: Patch GnuTLS
+        shell: bash
+        working-directory: build/ShiftMediaProject/gnutls
+        run: patch -p1 < ../../../patches/gnutls-arm64.patch
+
+      - name: Patch GMP
+        shell: bash
+        working-directory: build/ShiftMediaProject/gmp
+        run: patch -p1 < ../../../patches/gmp-arm64.patch
+
+      - name: Patch Nettle
+        shell: bash
+        working-directory: build/ShiftMediaProject/nettle
+        run: patch -p1 < ../../../patches/nettle-arm64.patch
+
+      - name: Patch zlib
+        shell: bash
+        working-directory: build/ShiftMediaProject/zlib
+        run: patch -p1 < ../../../patches/zlib-arm64.patch
+
+      - name: Build GnuTLS
+        shell: cmd
+        env:
+          CL: -MP
+        working-directory: build/ShiftMediaProject/gnutls/SMP
+        run: |
+          msbuild libgnutls_deps.sln /property:Configuration=${{env.buildtype}}DLL
+          msbuild libgnutls.sln /property:Configuration=${{env.buildtype}}DLL
+
+      - name: List files
+        shell: cmd
+        working-directory: build/msvc
+        run: dir /s
+
+      - name: Install GnuTLS
+        shell: bash
+        working-directory: build
+        run: |
+          cp -v -r msvc/include/*.h ${{env.prefix_path_unix}}/include/
+          cp -v msvc/lib/${{env.arch_short}}/*.lib ${{env.prefix_path_unix}}/lib/
+          cp -v msvc/bin/${{env.arch_short}}/*.dll ${{env.prefix_path_unix}}/bin/
+
+      - name: Create gnutls.pc
+        shell: bash
+        run: |
+          mkdir -p ${{env.prefix_path_unix}}/lib/pkgconfig
+          echo "prefix=${{env.prefix_path_forwardslash}}" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "exec_prefix=${{env.prefix_path_forwardslash}}" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "libdir=${{env.prefix_path_forwardslash}}/lib" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "includedir=${{env.prefix_path_forwardslash}}/include" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "Name: gnutls" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "Description: gnutls" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "URL: https://www.gnutls.org/" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "Version: ${{env.gnutls_version}}" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "Libs: -L\${libdir} -lgnutls" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
+          echo "Cflags: -I\${includedir}" >>${{env.prefix_path_unix}}/lib/pkgconfig/gnutls.pc
